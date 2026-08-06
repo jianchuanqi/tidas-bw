@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tidas-bw"
+version = "0.1.0"
+description = "Bidirectional migration between TIDAS packages and Brightway 2.5"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "tidas-bw contributors" }]
+keywords = ["LCA", "TIDAS", "Brightway", "ILCD"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering",
+]
+dependencies = [
+  "bw2data>=4.7,<5",
+  "tidas-sdk>=0.2.14,<0.3",
+]
+
+[project.optional-dependencies]
+package = ["bw2io>=0.9.17,<0.10"]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-cov>=6,<7",
+  "bw2calc>=2.5,<3",
+  "ruff>=0.11,<0.12",
+]
+
+[project.scripts]
+tidas-bw = "tidas_bw.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tidas_bw"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
