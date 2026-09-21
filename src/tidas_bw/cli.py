@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from contextlib import redirect_stdout
 
 from . import __version__
-from .api import export_tidas, import_tidas, validate_tidas
+from .api import export_tidas, import_tidas, preflight_import, validate_tidas
 from .errors import TidasBwError
 from .models import MigrationReport
 
@@ -17,7 +17,7 @@ from .models import MigrationReport
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tidas-bw",
-        description="Migrate open TIDAS data packages to and from Brightway 2.5.",
+        description="Migrate open TIDAS data packages to and from Brightway.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -26,6 +26,24 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("source")
     _add_validation_options(validate)
     _add_output_options(validate)
+
+    preflight = subparsers.add_parser(
+        "preflight",
+        help="Check importability of a TIDAS package without touching Brightway",
+        description=(
+            "Run every import check (package format, licences, references, mapping "
+            "precision, uncertainty, providers) and never create or modify Brightway data."
+        ),
+    )
+    preflight.add_argument("source")
+    preflight.add_argument(
+        "--database",
+        required=True,
+        help="Brightway database name the import would target",
+    )
+    preflight.add_argument("--biosphere-database")
+    _add_validation_options(preflight)
+    _add_output_options(preflight)
 
     import_command = subparsers.add_parser(
         "import", help="Install a TIDAS package in a Brightway project"
@@ -96,6 +114,14 @@ def _dispatch(args: argparse.Namespace) -> MigrationReport:
     }
     if args.command == "validate":
         return validate_tidas(args.source, max_json_mib=args.max_json_mib, **common)
+    if args.command == "preflight":
+        return preflight_import(
+            args.source,
+            database=args.database,
+            biosphere_database=args.biosphere_database,
+            max_json_mib=args.max_json_mib,
+            **common,
+        )
     if args.command == "import":
         return import_tidas(
             args.source,

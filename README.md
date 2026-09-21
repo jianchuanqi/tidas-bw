@@ -21,12 +21,20 @@ uv sync --python 3.12 --extra dev
 uv run tidas-bw --help
 ```
 
-## 三个主要命令
+## 主要命令
 
-先检查 TIDAS ZIP 或解压目录：
+先检查 TIDAS ZIP 或解压目录（只查格式、许可和引用闭包，不判断能否导入）：
 
 ```bash
 tidas-bw validate tiangong-open-data.zip --strict-references
+```
+
+导入前完整预检——运行导入的全部检查（格式、许可、引用、数值精度、不确定性、供应者解析），**绝不创建或修改任何 Brightway 数据**，并在报告中区分“包校验通过”与“可映射”两类结论：
+
+```bash
+tidas-bw preflight tiangong-open-data.zip \
+  --database tiangong-open-2026.08 \
+  --strict-references
 ```
 
 导入 Brightway：
@@ -125,9 +133,15 @@ tidas-bw export \
 ## Python API
 
 ```python
-from tidas_bw import export_tidas, import_tidas, validate_tidas
+from tidas_bw import export_tidas, import_tidas, preflight_import, validate_tidas
 
 report = validate_tidas("tiangong-open-data.zip", strict_references=True)
+
+report = preflight_import(
+    "tiangong-open-data.zip",
+    database="tiangong-open-2026.08",
+    strict_references=True,
+)
 
 report = import_tidas(
     "tiangong-open-data.zip",

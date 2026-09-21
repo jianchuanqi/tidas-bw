@@ -26,12 +26,93 @@ def validate_tidas(
     strict_references: bool = False,
     max_json_mib: int = 128,
 ) -> MigrationReport:
+    """Check package format, licences, and reference closure only.
+
+    A passing report does not guarantee that the package can be imported:
+    mapping-level restrictions (amount precision, uncertainty representation,
+    provider resolution) are checked separately. Use :func:`preflight_import`
+    to run every import check without touching Brightway.
+    """
     package = read_package(source, max_json_mib=max_json_mib)
     return validate_package(
         package,
         require_open=require_open,
         strict_references=strict_references,
     )
+
+
+def _read_and_check_import_basics(
+    source: str | Path,
+    *,
+    strict_references: bool,
+    max_json_mib: int,
+) -> tuple[TidasPackage, MigrationReport]:
+    package = read_package(source, max_json_mib=max_json_mib)
+    validation = validate_package(
+        package,
+        require_open=True,
+        strict_references=strict_references,
+    )
+    if not package.by_category("processes"):
+        validation.add(
+            "error",
+            "no_process_datasets",
+            "A Brightway import requires at least one TIDAS process dataset",
+        )
+    return package, validation
+
+
+def preflight_import(
+    source: str | Path,
+    *,
+    database: str,
+    biosphere_database: str | None = None,
+    strict_references: bool = False,
+    max_json_mib: int = 128,
+) -> MigrationReport:
+    """Run every import check without creating or modifying Brightway data.
+
+    The report distinguishes package-level findings (schema, licence,
+    reference closure) from mapping-level findings (amount precision,
+    uncertainty representation, provider resolution), so a package that
+    validates cleanly but cannot be mapped is reported as such.
+    """
+    package, report = _read_and_check_import_basics(
+        source,
+        strict_references=strict_references,
+        max_json_mib=max_json_mib,
+    )
+    target_biosphere = biosphere_database or f"{database}-biosphere"
+    report.direction = "tidas-to-brightway"
+    report.target = f"{database} (+ {target_biosphere}) [preflight; nothing written]"
+    report.metadata["preflight"] = True
+    report.metadata["database"] = database
+    report.metadata["biosphere_database"] = target_biosphere
+    if report.ok:
+        report.add(
+            "info",
+            "package_checks_passed",
+            "Schema, licence, and reference checks passed; mapping preflight follows",
+        )
+    mapping = TidasMapper(
+        package,
+        database=database,
+        biosphere_database=target_biosphere,
+    ).build()
+    report.issues.extend(mapping.report.issues)
+    if report.ok:
+        report.add(
+            "info",
+            "mapping_checks_passed",
+            "All processes, exchanges, providers, amounts, and methods can be mapped "
+            "to Brightway",
+        )
+    report.add(
+        "info",
+        "preflight_no_write",
+        "Preflight completed; no Brightway project or database was created or modified",
+    )
+    return report
 
 
 def import_tidas(
@@ -45,19 +126,12 @@ def import_tidas(
     max_json_mib: int = 128,
     brightway_dir: str | Path | None = None,
 ) -> MigrationReport:
-    package = read_package(source, max_json_mib=max_json_mib)
-    validation = validate_package(
-        package,
-        require_open=True,
+    package, validation = _read_and_check_import_basics(
+        source,
         strict_references=strict_references,
+        max_json_mib=max_json_mib,
     )
     target_biosphere = biosphere_database or f"{database}-biosphere"
-    if not package.by_category("processes"):
-        validation.add(
-            "error",
-            "no_process_datasets",
-            "A Brightway import requires at least one TIDAS process dataset",
-        )
     if not validation.ok:
         validation.direction = "tidas-to-brightway"
         validation.target = f"{project}/{database}"

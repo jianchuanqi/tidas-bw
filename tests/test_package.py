@@ -24,7 +24,9 @@ def test_zip_output_is_deterministic_and_readable(tmp_path) -> None:
     assert first.read_bytes() == second.read_bytes()
     loaded = read_package(first)
     assert loaded.counts() == package.counts()
-    assert loaded.ignored_json == ["tidas-bw-manifest.json"]
+    # "manifest.json" is the package-metadata name the official tidas tool
+    # ignores; arbitrary root-level JSON names break its eILCD projection.
+    assert loaded.ignored_json == ["manifest.json"]
 
 
 def test_reader_accepts_platform_json_wrapper(tmp_path) -> None:

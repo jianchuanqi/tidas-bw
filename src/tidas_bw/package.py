@@ -408,7 +408,7 @@ def _write_zip(
                 info.external_attr = 0o100644 << 16
                 archive.writestr(info, _json_bytes(record.document))
             if manifest is not None:
-                info = zipfile.ZipInfo("tidas-bw-manifest.json", date_time=(1980, 1, 1, 0, 0, 0))
+                info = zipfile.ZipInfo("manifest.json", date_time=(1980, 1, 1, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.external_attr = 0o100644 << 16
                 archive.writestr(info, _json_bytes(manifest))
@@ -435,7 +435,7 @@ def _write_directory(
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(_json_bytes(record.document))
         if manifest is not None:
-            (staging / "tidas-bw-manifest.json").write_bytes(_json_bytes(manifest))
+            (staging / "manifest.json").write_bytes(_json_bytes(manifest))
         if target.exists():
             if not overwrite:
                 raise PackageError(f"output already exists: {target}")
