@@ -28,6 +28,14 @@ from .templates import (
 )
 from .utils import as_list, deep_get, multilingual, number_string, pick_text, semantic_hash
 
+# Categories whose eILCD/XSD projection accepts the standard licence fields
+# (they share the ILCD PublicationAndOwnershipType, which contains copyright,
+# licenceType, and accessRestrictions); generated documents for other
+# categories must not carry them (issue #1).
+LICENSE_FIELD_CATEGORIES = frozenset(
+    {"processes", "flows", "sources", "lifecyclemodels", "lciamethods"}
+)
+
 PROCESS_TYPES = {
     "Unit process, single operation",
     "Unit process, black box",
@@ -1172,6 +1180,7 @@ def _apply_native_provenance(
                 owner_uuid=OWNER_UUID,
                 owner="tidas-bw",
                 license_text="MIT License",
+                write_license_fields=record.category in LICENSE_FIELD_CATEGORIES,
             )
         else:
             owner_uuid = _provenance_owner_uuid(provenance)
@@ -1180,6 +1189,7 @@ def _apply_native_provenance(
                 owner_uuid=owner_uuid,
                 owner=provenance["owner"],
                 license_text=provenance["license"],
+                write_license_fields=record.category in LICENSE_FIELD_CATEGORIES,
             )
         root = document.get(record.root_key)
         if isinstance(root, dict) and provenance is not None:
@@ -1225,6 +1235,7 @@ def _apply_native_provenance(
             owner_uuid=owner_uuid,
             owner=provenance["owner"],
             license_text=provenance["license"],
+            write_license_fields=False,
         )
         result.append(
             record_from_document(
@@ -1257,26 +1268,35 @@ def _rewrite_publication_nodes(
     owner_uuid: str,
     owner: str,
     license_text: str,
+    write_license_fields: bool,
 ) -> None:
     if isinstance(value, dict):
         if "common:referenceToOwnershipOfDataSet" in value:
             value["common:referenceToOwnershipOfDataSet"] = global_reference(
                 "contacts", owner_uuid, owner
             )
-            normalised_license = license_text.lower()
-            value["common:copyright"] = (
-                "false"
-                if "cc0" in normalised_license or "public domain" in normalised_license
-                else "true"
-            )
-            value["common:licenseType"] = "Free of charge for all users and uses"
-            value["common:accessRestrictions"] = multilingual(license_text)
+            if write_license_fields:
+                normalised_license = license_text.lower()
+                value["common:copyright"] = (
+                    "false"
+                    if "cc0" in normalised_license or "public domain" in normalised_license
+                    else "true"
+                )
+                value["common:licenseType"] = "Free of charge for all users and uses"
+                value["common:accessRestrictions"] = multilingual(license_text)
+            else:
+                # These fields break the official eILCD/XSD projection on
+                # structural record types (issue #1); strip stale copies.
+                value.pop("common:copyright", None)
+                value.pop("common:licenseType", None)
+                value.pop("common:accessRestrictions", None)
         for child in value.values():
             _rewrite_publication_nodes(
                 child,
                 owner_uuid=owner_uuid,
                 owner=owner,
                 license_text=license_text,
+                write_license_fields=write_license_fields,
             )
     elif isinstance(value, list):
         for child in value:
@@ -1285,6 +1305,7 @@ def _rewrite_publication_nodes(
                 owner_uuid=owner_uuid,
                 owner=owner,
                 license_text=license_text,
+                write_license_fields=write_license_fields,
             )
 
 

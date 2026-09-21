@@ -11,3 +11,5 @@ dist/
 build/
 *.bw2package
 *.zip
+.workbuddy/
+test-artifacts/

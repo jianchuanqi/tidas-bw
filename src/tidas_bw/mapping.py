@@ -913,13 +913,14 @@ class TidasMapper:
                     )
                     continue
                 if Decimal(str(amount)) != decimal_amount:
-                    self.report.add(
-                        "error",
-                        "unrepresentable_characterisation_precision",
-                        f"Factor for flow {flow_uuid} cannot be represented exactly by Brightway's floating-point storage",
+                    _report_rounding(
+                        self.report,
+                        code="characterisation_factor_rounded",
+                        message_prefix=f"LCIA factor for flow {flow_uuid}",
+                        original=decimal_amount,
+                        rounded=amount,
                         dataset=record.identity,
                     )
-                    continue
                 location = factor.get("location")
                 if location:
                     self.report.add(
@@ -1032,14 +1033,15 @@ def _exchange_amount(
         if not isfinite(result) or (decimal_value != 0 and result == 0):
             raise InvalidOperation
         if Decimal(str(result)) != decimal_value:
-            report.add(
-                "error",
-                "unrepresentable_exchange_precision",
-                f"Exchange amount {value!r} cannot be represented exactly by Brightway's floating-point storage",
+            _report_rounding(
+                report,
+                code="exchange_amount_rounded",
+                message_prefix=f"Exchange amount {value!r}",
+                original=decimal_value,
+                rounded=result,
                 dataset=process.identity,
                 path=f"exchange:{exchange.get('@dataSetInternalID')}",
             )
-            return None
         return result
     except (InvalidOperation, OverflowError, TypeError, ValueError):
         report.add(
@@ -1050,6 +1052,34 @@ def _exchange_amount(
             path=f"exchange:{exchange.get('@dataSetInternalID')}",
         )
         return None
+
+
+def _report_rounding(
+    report: MigrationReport,
+    *,
+    code: str,
+    message_prefix: str,
+    original: Decimal,
+    rounded: float,
+    dataset: str | None = None,
+    path: str | None = None,
+) -> None:
+    """Record an automatic float64 rounding with its exact error bounds."""
+    stored = Decimal(str(rounded))
+    delta = abs(original - stored)
+    relative = delta / abs(original) if original != 0 else Decimal(0)
+    report.add(
+        "info",
+        code,
+        (
+            f"{message_prefix} was rounded automatically from {original} to {rounded} "
+            f"to fit float64 storage (absolute difference {delta:.3e}, "
+            f"relative difference {relative:.3e}); "
+            "the original decimal remains preserved in the TIDAS metadata"
+        ),
+        dataset=dataset,
+        path=path,
+    )
 
 
 def _has_quantified_uncertainty(

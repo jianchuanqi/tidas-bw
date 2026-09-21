@@ -72,10 +72,25 @@ def full_compliance() -> dict[str, Any]:
 
 
 def publication(uuid: str) -> dict[str, Any]:
+    """Base publication block without licence fields.
+
+    The official TIDAS eILCD/XSD projection rejects ``common:copyright`` and
+    ``common:licenseType`` on contact, flow property, and unit group datasets
+    (verified with tidas-tools 0.2.1), so generated documents for those
+    categories must not carry licence fields. Their licence evidence follows
+    the package's data-bearing datasets.
+    """
     return {
         "common:dataSetVersion": VERSION,
         "common:permanentDataSetURI": f"urn:uuid:{uuid}",
         "common:referenceToOwnershipOfDataSet": owner_reference(),
+    }
+
+
+def licensed_publication(uuid: str) -> dict[str, Any]:
+    """Publication block with licence fields, for categories whose XSD accepts them."""
+    return {
+        **publication(uuid),
         "common:copyright": "false",
         "common:licenseType": "Free of charge for all users and uses",
     }
@@ -153,7 +168,7 @@ def source_document() -> dict[str, Any]:
                     "common:timeStamp": TIMESTAMP,
                     "common:referenceToDataSetFormat": format_reference(),
                 },
-                "publicationAndOwnership": publication(FORMAT_SOURCE_UUID),
+                "publicationAndOwnership": licensed_publication(FORMAT_SOURCE_UUID),
             },
         }
     }
@@ -317,7 +332,7 @@ def flow_document(
                     "common:timeStamp": TIMESTAMP,
                     "common:referenceToDataSetFormat": format_reference(),
                 },
-                "publicationAndOwnership": publication(uuid),
+                "publicationAndOwnership": licensed_publication(uuid),
             },
             "flowProperties": {
                 "flowProperty": {
@@ -420,7 +435,7 @@ def process_document(
                     "common:referenceToDataSetFormat": format_reference(),
                     "common:referenceToPersonOrEntityEnteringTheData": owner_reference(),
                 },
-                "publicationAndOwnership": publication(uuid),
+                "publicationAndOwnership": licensed_publication(uuid),
             },
             "exchanges": {"exchange": list(exchanges)},
         }
@@ -513,7 +528,7 @@ def lifecycle_model_document(
                     "common:referenceToDataSetFormat": format_reference(),
                     "common:referenceToPersonOrEntityEnteringTheData": owner_reference(),
                 },
-                "publicationAndOwnership": publication(uuid),
+                "publicationAndOwnership": licensed_publication(uuid),
             },
         }
     }

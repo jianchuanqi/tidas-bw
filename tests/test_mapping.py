@@ -313,3 +313,33 @@ def test_zero_and_unrepresentable_reference_amounts_fail_preflight() -> None:
             issue.code in {"non_positive_reference_amount", "invalid_exchange_amount"}
             for issue in payload.report.issues
         )
+
+
+def test_high_precision_amount_is_rounded_and_reported_not_rejected() -> None:
+    package = make_two_process_package()
+    supplier = next(
+        record
+        for record in package.records
+        if record.category == "processes" and record.uuid == stable_uuid("test:process:supplier")
+    )
+    exchange = supplier.document["processDataSet"]["exchanges"]["exchange"][0]
+    exchange["meanAmount"] = exchange["resultingAmount"] = "0.123456789012345678"
+    replacement = record_from_document(supplier.document, source_path=supplier.source_path)
+    package.records[package.records.index(supplier)] = replacement
+
+    payload = TidasMapper(
+        package,
+        database="foreground",
+        biosphere_database="foreground-biosphere",
+    ).build()
+
+    assert payload.report.ok
+    rounded = [
+        issue
+        for issue in payload.report.issues
+        if issue.code == "exchange_amount_rounded" and issue.severity == "info"
+    ]
+    assert len(rounded) == 1
+    assert "0.123456789012345678" in rounded[0].message
+    assert "0.12345678901234568" in rounded[0].message
+    assert "float64" in rounded[0].message

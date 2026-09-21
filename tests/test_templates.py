@@ -187,3 +187,88 @@ def test_bad_dataset_shape_is_reported_instead_of_crashing() -> None:
 
     assert not report.ok
     assert any(issue.code == "schema_validation" for issue in report.issues)
+
+
+def test_structural_records_need_no_own_licence_fields() -> None:
+    """The official eILCD/XSD projection rejects licence fields on contacts,
+    flow properties, and unit groups (issue #1); stripping them must not break
+    the internal open-licence check."""
+    package = make_two_process_package()
+    stripped_categories = {"contacts", "flowproperties", "unitgroups"}
+    stripped = []
+    for record in package.records:
+        document = deepcopy(record.document)
+        if record.category in stripped_categories:
+            publication = document[record.root_key]["administrativeInformation"][
+                "publicationAndOwnership"
+            ]
+            for field in ("common:copyright", "common:licenseType", "common:accessRestrictions"):
+                publication.pop(field, None)
+        stripped.append(record_from_document(document, source_path=record.source_path))
+
+    report = validate_package(
+        TidasPackage(records=stripped, source=package.source),
+        require_open=True,
+        strict_references=True,
+    )
+
+    assert report.ok, report.to_dict()
+
+
+def test_structural_records_with_restricted_licence_are_still_rejected() -> None:
+    package = make_two_process_package()
+    unit_group = next(record for record in package.records if record.category == "unitgroups")
+    unit_group.document[unit_group.root_key]["administrativeInformation"][
+        "publicationAndOwnership"
+    ]["common:licenseType"] = "Not for redistribution"
+    replacement = record_from_document(
+        unit_group.document, source_path=unit_group.source_path
+    )
+    package.records[package.records.index(unit_group)] = replacement
+
+    report = validate_package(package, require_open=True, strict_references=True)
+
+    assert not report.ok
+    assert any(
+        issue.code == "restricted_license" and issue.dataset == unit_group.identity
+        for issue in report.issues
+    )
+
+
+def test_generated_documents_place_licence_fields_only_where_official_schema_allows() -> None:
+    from tidas_bw.templates import (
+        contact_document,
+        flow_property_document,
+        licensed_publication,
+        process_document,
+        source_document,
+        unit_group_document,
+    )
+
+    forbidden = {"common:copyright", "common:licenseType", "common:accessRestrictions"}
+    for document in (
+        contact_document(),
+        unit_group_document(stable_uuid("test:ug"), "kilogram"),
+        flow_property_document(stable_uuid("test:fp"), stable_uuid("test:ug"), "kilogram"),
+    ):
+        root = next(iter(document.values()))
+        publication = root["administrativeInformation"]["publicationAndOwnership"]
+        assert not (forbidden & publication.keys()), sorted(forbidden & publication.keys())
+
+    process = process_document(
+        stable_uuid("test:proc"), "p", "product", "GLO", exchanges=()
+    )
+    assert (
+        "common:licenseType"
+        in process["processDataSet"]["administrativeInformation"]["publicationAndOwnership"]
+    )
+    assert (
+        "common:licenseType"
+        in source_document()["sourceDataSet"]["administrativeInformation"][
+            "publicationAndOwnership"
+        ]
+    )
+    licensed = licensed_publication("x")
+    assert {"common:copyright", "common:licenseType"} <= set(licensed)
+    assert "common:accessRestrictions" not in licensed
+    assert "common:permanentDataSetURI" in licensed

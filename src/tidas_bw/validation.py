@@ -46,6 +46,14 @@ REFERENCE_TYPES = {
 
 CORE_REFERENCE_CATEGORIES = {"processes", "flows", "flowproperties", "unitgroups"}
 
+# The official TIDAS eILCD/XSD projection rejects the standard licence fields
+# (common:copyright, common:licenseType, common:accessRestrictions) on these
+# record categories, so generated documents never carry them there and their
+# open licence follows the package's data-bearing datasets (issue #1).
+# Processes, flows, sources, and lifecycle models accept the fields and must
+# still prove an open licence individually.
+STRUCTURAL_LICENCE_CATEGORIES = frozenset({"contacts", "flowproperties", "unitgroups"})
+
 
 def validate_package(
     package: TidasPackage,
@@ -156,6 +164,9 @@ def _validate_license(
             f"Access restrictions are not recognised as permitting open use: {restrictions}",
             dataset=record.identity,
         )
+        return
+
+    if record.category in STRUCTURAL_LICENCE_CATEGORIES:
         return
 
     open_proven = is_open_license(declared) or (
