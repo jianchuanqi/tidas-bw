@@ -1339,7 +1339,11 @@ name = "tidas-bw"
 version = "0.3.0"
 source = { editable = "." }
 dependencies = [
+    { name = "bw-processing" },
     { name = "bw2data" },
+    { name = "fsspec" },
+    { name = "numpy" },
+    { name = "stats-arrays" },
     { name = "tidas-sdk" },
 ]
 
@@ -1356,12 +1360,16 @@ package = [
 
 [package.metadata]
 requires-dist = [
+    { name = "bw-processing", specifier = ">=1.6,<2" },
     { name = "bw2calc", marker = "extra == 'dev'", specifier = ">=2.5,<3" },
     { name = "bw2data", specifier = ">=4.7,<5" },
     { name = "bw2io", marker = "extra == 'package'", specifier = ">=0.9.17,<0.10" },
+    { name = "fsspec", specifier = ">=2024" },
+    { name = "numpy", specifier = ">=2,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<9" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11,<0.12" },
+    { name = "stats-arrays", specifier = ">=2,<3" },
     { name = "tidas-sdk", specifier = ">=0.2.14,<0.3" },
 ]
 provides-extras = ["package", "dev"]

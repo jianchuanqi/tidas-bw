@@ -201,7 +201,7 @@ def test_tidas_lcia_method_is_usable_by_brightway(tmp_path, isolated_brightway_d
 
     package, method_name = with_lcia_method(make_two_process_package())
     source = tmp_path / "with-lcia.zip"
-    write_package(package.records, source)
+    write_package(package.records, source, manifest=package.manifest)
 
     report = import_tidas(
         source,
@@ -259,7 +259,7 @@ def test_parameterized_exchange_roundtrip_preserves_mean_and_blocks_unsafe_edit(
     raw_exchange["meanAmount"] = "1.25"
     raw_exchange["resultingAmount"] = "2.5"
     source = tmp_path / "parameterized.zip"
-    write_package(package.records, source)
+    write_package(package.records, source, manifest=package.manifest)
 
     imported = import_tidas(
         source,
@@ -308,7 +308,8 @@ def test_preserved_export_rejects_added_activity_metadata(tmp_path, isolated_bri
     import bw2data as bd
 
     source = tmp_path / "metadata-source.zip"
-    write_package(make_two_process_package().records, source)
+    package = make_two_process_package()
+    write_package(package.records, source, manifest=package.manifest)
     imported = import_tidas(
         source,
         project="metadata-project",
@@ -342,7 +343,8 @@ def test_preserved_export_rejects_changed_unparameterized_amount(
     import bw2data as bd
 
     source = tmp_path / "amount-source.zip"
-    write_package(make_two_process_package().records, source)
+    package = make_two_process_package()
+    write_package(package.records, source, manifest=package.manifest)
     imported = import_tidas(
         source,
         project="amount-project",
@@ -376,7 +378,8 @@ def test_preserved_export_rejects_mixed_tidas_and_native_activities(
     import bw2data as bd
 
     source = tmp_path / "mixed-source.zip"
-    write_package(make_two_process_package().records, source)
+    package = make_two_process_package()
+    write_package(package.records, source, manifest=package.manifest)
     imported = import_tidas(
         source,
         project="mixed-project",
@@ -420,7 +423,8 @@ def test_preserved_export_detects_relink_to_same_code_in_other_database(
     import bw2data as bd
 
     source = tmp_path / "relink-source.zip"
-    write_package(make_two_process_package().records, source)
+    package = make_two_process_package()
+    write_package(package.records, source, manifest=package.manifest)
     imported = import_tidas(
         source,
         project="relink-project",

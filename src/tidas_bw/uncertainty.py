@@ -26,15 +26,13 @@ the minimum/maximum fields only for uniform and triangular distributions.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
-from math import isfinite, log, sqrt
+from decimal import Decimal, DecimalException, InvalidOperation, localcontext
+from math import isfinite, log
 from typing import Any
 
-DISTRIBUTIONS = {"undefined", "log-normal", "normal", "uniform", "triangular"}
+from stats_arrays import LognormalUncertainty, NormalUncertainty, UniformUncertainty
 
-# Percentage/relative tolerance when checking that the TIDAS amount lies
-# inside a uniform interval; absorbs the float64 rounding of the amount.
-AMOUNT_BOUND_TOLERANCE = 1e-9
+DISTRIBUTIONS = {"undefined", "log-normal", "normal", "uniform", "triangular"}
 
 
 @dataclass(frozen=True)
@@ -61,6 +59,9 @@ def convert_uncertainty(
     amount: float,
 ) -> UncertaintyMapping:
     """Convert TIDAS uncertainty fields to Brightway uncertainty fields."""
+    amount = float(amount)
+    if not isfinite(amount):
+        return UncertaintyMapping(error="Uncertainty amount must be finite")
     distribution_type = str(distribution or "").strip().lower()
     has_rsd = _has_value(rsd95)
     has_min = _has_value(minimum)
@@ -104,6 +105,10 @@ def convert_uncertainty(
         )
 
     if distribution_type == "uniform":
+        if has_rsd:
+            return UncertaintyMapping(
+                error="relativeStandardDeviation95In must remain empty for uniform distributions"
+            )
         return _convert_uniform(minimum, maximum, amount)
 
     rsd_value = _decimal(rsd95)
@@ -113,25 +118,40 @@ def convert_uncertainty(
             f"distributions and must be a non-negative percentage, got {rsd95!r}"
         )
 
-    if distribution_type == "normal":
-        return _convert_normal(rsd_value, amount)
-    return _convert_lognormal(rsd_value, amount)
+    try:
+        with localcontext() as ctx:
+            ctx.prec = max(34, len(rsd_value.as_tuple().digits) + 16)
+            if distribution_type == "normal":
+                return _convert_normal(rsd_value, amount)
+            return _convert_lognormal(rsd_value, amount)
+    except (DecimalException, OverflowError, ValueError):
+        return UncertaintyMapping(
+            error="Uncertainty parameter conversion exceeds the supported numeric range"
+        )
 
 
 def _convert_normal(rsd_value: Decimal, amount: float) -> UncertaintyMapping:
-    sigma = float(rsd_value * Decimal(str(abs(amount))) / Decimal(200))
-    if not isfinite(sigma) or sigma <= 0:
+    if rsd_value == 0:
         return UncertaintyMapping(
             notes=(
                 f"relativeStandardDeviation95In {rsd_value} implies zero standard "
                 "deviation; the exchange is mapped as deterministic",
             ),
         )
+    if amount == 0:
+        return UncertaintyMapping(
+            error="A positive relative deviation at zero mean does not define an absolute standard deviation"
+        )
+    sigma = float(rsd_value * Decimal(str(abs(amount))) / Decimal(200))
+    if not isfinite(sigma) or sigma <= 0:
+        return UncertaintyMapping(
+            error="Normal standard deviation overflows or underflows float64; refusing deterministic simplification"
+        )
     return UncertaintyMapping(
         fields={
-            "uncertainty type": 2,
+            "uncertainty type": NormalUncertainty.id,
             "loc": amount,
-            "sigma": sigma,
+            "scale": sigma,
         }
     )
 
@@ -142,8 +162,8 @@ def _convert_lognormal(rsd_value: Decimal, amount: float) -> UncertaintyMapping:
             error="Log-normal distributions require a positive amount; a log-normal "
             f"distribution on {amount!r} is undefined"
         )
-    sdg_squared = float(rsd_value / Decimal(100))
-    if sdg_squared <= 0 or not isfinite(sdg_squared):
+    sdg_squared = rsd_value / Decimal(100)
+    if sdg_squared <= 0:
         return UncertaintyMapping(
             error=f"relativeStandardDeviation95In {rsd_value} does not describe a valid "
             "SDg^2 percentage"
@@ -161,10 +181,13 @@ def _convert_lognormal(rsd_value: Decimal, amount: float) -> UncertaintyMapping:
             "< 1; the specification states SDg^2, which cannot be below 1 for an "
             "uncertain log-normal distribution"
         )
-    scale = log(sqrt(sdg_squared))
+    # Decimal ln avoids rounding a small but positive deviation down to SDg=1.
+    scale = float(sdg_squared.ln() / 2)
+    if not isfinite(scale) or scale <= 0:
+        return UncertaintyMapping(error="Log-normal scale overflows or underflows float64")
     return UncertaintyMapping(
         fields={
-            "uncertainty type": 1,
+            "uncertainty type": LognormalUncertainty.id,
             "loc": log(amount),
             "scale": scale,
         }
@@ -186,15 +209,25 @@ def _convert_uniform(minimum: Any, maximum: Any, amount: float) -> UncertaintyMa
         return UncertaintyMapping(
             error=f"Uniform minimum {minimum!r} is greater than maximum {maximum!r}"
         )
-    tolerance = AMOUNT_BOUND_TOLERANCE * max(1.0, abs(amount))
-    if amount < float(low) - tolerance or amount > float(high) + tolerance:
+    bounds = (float(low), float(high))
+    if any(
+        not isfinite(v) or (d != 0 and v == 0) for d, v in zip((low, high), bounds, strict=True)
+    ):
+        return UncertaintyMapping(error="Uniform bounds overflow or underflow float64")
+    if low != high and bounds[0] == bounds[1]:
+        return UncertaintyMapping(error="Uniform interval collapses in float64")
+    if amount < bounds[0] or amount > bounds[1]:
         return UncertaintyMapping(
             error=f"Uniform minimum/maximum define the interval [{low}, {high}], which "
             f"does not contain the exchange amount {amount!r}"
         )
+    if low == high:
+        return UncertaintyMapping(
+            notes=("Uniform interval has zero width; mapped as deterministic",)
+        )
     return UncertaintyMapping(
         fields={
-            "uncertainty type": 3,
+            "uncertainty type": UniformUncertainty.id,
             "minimum": float(low),
             "maximum": float(high),
         }

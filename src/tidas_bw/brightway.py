@@ -8,6 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from .calculation_data import write_database_calculation_data, write_method_calculation_data
 from .errors import BrightwayError, ValidationFailure
 from .models import BrightwayPayload
 
@@ -122,6 +123,8 @@ def install_payload(
             method = bd.Method(name)
             method.register(**deepcopy(metadata))
             method.write(data)
+            if metadata.get("calculation_precision") == "float64":
+                write_method_calculation_data(bd, name)
 
         for method_payload in payload.methods:
             touched_methods.append(method_payload.name)
@@ -129,6 +132,8 @@ def install_payload(
             method = bd.Method(method_payload.name)
             method.register(**deepcopy(method_payload.metadata))
             method.write(method_payload.factors)
+            write_method_calculation_data(bd, method_payload.name)
+        write_database_calculation_data(bd, database, payload.technosphere)
     except BaseException as exc:
         try:
             _rollback(
@@ -282,9 +287,13 @@ def _rollback(
     for name, (data, metadata) in database_backups.items():
         _write_database(bd, name, data)
         bd.databases[name].update(metadata)
+        if metadata.get("tidas_bw", {}).get("calculation_precision") == "float64":
+            write_database_calculation_data(bd, name, data)
     bd.databases.flush()
     for name, (data, metadata) in method_backups.items():
         _delete_method(bd, name)
         method = bd.Method(name)
         method.register(**metadata)
         method.write(data)
+        if metadata.get("calculation_precision") == "float64":
+            write_method_calculation_data(bd, name)

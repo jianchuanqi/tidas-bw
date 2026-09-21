@@ -42,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Brightway database name the import would target",
     )
     preflight.add_argument("--biosphere-database")
+    _add_precision_options(preflight)
     _add_validation_options(preflight)
     _add_output_options(preflight)
 
@@ -57,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Explicitly replace databases and methods with the same names",
     )
+    _add_precision_options(import_command)
     _add_validation_options(import_command)
     _add_brightway_options(import_command)
     _add_output_options(import_command)
@@ -98,7 +100,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 report = _dispatch(args)
         else:
             report = _dispatch(args)
-    except (TidasBwError, OSError) as exc:
+    except (TidasBwError, OSError, ValueError) as exc:
         if getattr(args, "json", False):
             print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         else:
@@ -119,6 +121,9 @@ def _dispatch(args: argparse.Namespace) -> MigrationReport:
             args.source,
             database=args.database,
             biosphere_database=args.biosphere_database,
+            allow_rounding=args.allow_rounding,
+            absolute_tolerance=args.absolute_tolerance,
+            relative_tolerance=args.relative_tolerance,
             max_json_mib=args.max_json_mib,
             **common,
         )
@@ -128,6 +133,9 @@ def _dispatch(args: argparse.Namespace) -> MigrationReport:
             project=args.project,
             database=args.database,
             biosphere_database=args.biosphere_database,
+            allow_rounding=args.allow_rounding,
+            absolute_tolerance=args.absolute_tolerance,
+            relative_tolerance=args.relative_tolerance,
             replace=args.replace,
             max_json_mib=args.max_json_mib,
             brightway_dir=args.brightway_dir,
@@ -198,3 +206,9 @@ def cli(argv: Sequence[str] | None = None) -> int:
     except SystemExit as exc:
         return int(exc.code)
     return 0
+
+
+def _add_precision_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--allow-rounding", action="store_true", help="Explicitly allow float64 approximation within the supplied tolerances")
+    parser.add_argument("--absolute-tolerance", default="0", help="Absolute error allowance, also used near zero (default: 0)")
+    parser.add_argument("--relative-tolerance", default="0", help="Relative error allowance (default: 0); limit = absolute + relative * abs(value)")

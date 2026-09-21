@@ -10,7 +10,8 @@ from ._fixtures import make_two_process_package, stable_uuid
 
 def test_validate_cli_returns_machine_readable_success(tmp_path, capsys) -> None:
     source = tmp_path / "cli-input.zip"
-    write_package(make_two_process_package().records, source)
+    package = make_two_process_package()
+    write_package(package.records, source, manifest=package.manifest)
 
     exit_code = cli(["validate", str(source), "--strict-references", "--json"])
 
@@ -24,7 +25,8 @@ def test_validate_cli_returns_machine_readable_success(tmp_path, capsys) -> None
 
 def test_preflight_cli_reports_mappability_without_writing(tmp_path, capsys) -> None:
     source = tmp_path / "ok"
-    write_package(make_two_process_package().records, source)
+    package = make_two_process_package()
+    write_package(package.records, source, manifest=package.manifest)
 
     exit_code = cli(["preflight", str(source), "--database", "probe", "--json"])
 
@@ -55,7 +57,7 @@ def test_preflight_cli_surfaces_mapping_failures_that_validation_misses(
         consumer.document, source_path=consumer.source_path
     )
     source = tmp_path / "triangular"
-    write_package(package.records, source)
+    write_package(package.records, source, manifest=package.manifest)
 
     validate_exit = cli(["validate", str(source), "--json"])
     validate_result = json.loads(capsys.readouterr().out)
@@ -70,3 +72,17 @@ def test_preflight_cli_surfaces_mapping_failures_that_validation_misses(
     assert any(
         issue["code"] == "unmappable_exchange_uncertainty" for issue in preflight_result["issues"]
     )
+
+
+def test_precision_flags_control_preflight(tmp_path, capsys):
+    package = make_two_process_package()
+    exchange = package.by_category("processes")[0].document["processDataSet"]["exchanges"]["exchange"][1]
+    exchange.update(meanAmount="0.123456789012345678", resultingAmount="0.123456789012345678")
+    write_package(package.records, tmp_path / "source", manifest=package.manifest)
+    base = ["preflight", str(tmp_path / "source"), "--database", "data", "--json"]
+    assert cli(base) == 2
+    assert not json.loads(capsys.readouterr().out)["ok"]
+    assert cli([*base, "--allow-rounding", "--relative-tolerance", "1e-15"]) == 0
+    assert json.loads(capsys.readouterr().out)["ok"]
+    assert cli([*base, "--allow-rounding", "--relative-tolerance", "-1"]) == 2
+    assert "non-negative" in json.loads(capsys.readouterr().out)["error"]

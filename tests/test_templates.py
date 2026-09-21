@@ -53,7 +53,7 @@ def test_all_elementary_category_branches_pass_schema() -> None:
     ]
 
     report = validate_package(
-        TidasPackage(records=[*closure, *generated], source="category-branches"),
+        TidasPackage(records=[*closure, *generated], source="category-branches", manifest=package.manifest),
         require_open=True,
         strict_references=True,
     )
@@ -207,7 +207,7 @@ def test_structural_records_need_no_own_licence_fields() -> None:
         stripped.append(record_from_document(document, source_path=record.source_path))
 
     report = validate_package(
-        TidasPackage(records=stripped, source=package.source),
+        TidasPackage(records=stripped, source=package.source, manifest=package.manifest),
         require_open=True,
         strict_references=True,
     )

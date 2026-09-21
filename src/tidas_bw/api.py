@@ -15,6 +15,7 @@ from .brightway import (
 from .mapping import TidasMapper
 from .models import MigrationReport
 from .package import TidasPackage, read_package, write_package
+from .precision import PrecisionPolicy
 from .reverse import BrightwayExporter
 from .validation import validate_package
 
@@ -69,6 +70,9 @@ def preflight_import(
     biosphere_database: str | None = None,
     strict_references: bool = False,
     max_json_mib: int = 128,
+    allow_rounding: bool = False,
+    absolute_tolerance: str = "0",
+    relative_tolerance: str = "0",
 ) -> MigrationReport:
     """Run every import check without creating or modifying Brightway data.
 
@@ -77,6 +81,7 @@ def preflight_import(
     uncertainty representation, provider resolution), so a package that
     validates cleanly but cannot be mapped is reported as such.
     """
+    precision = PrecisionPolicy(allow_rounding, absolute_tolerance, relative_tolerance)
     package, report = _read_and_check_import_basics(
         source,
         strict_references=strict_references,
@@ -94,18 +99,28 @@ def preflight_import(
             "package_checks_passed",
             "Schema, licence, and reference checks passed; mapping preflight follows",
         )
-    mapping = TidasMapper(
-        package,
-        database=database,
-        biosphere_database=target_biosphere,
-    ).build()
-    report.issues.extend(mapping.report.issues)
+    report.metadata["package_ok"] = report.ok
     if report.ok:
+        mapping = TidasMapper(
+            package,
+            database=database,
+            biosphere_database=target_biosphere,
+            precision=precision,
+        ).build()
+        report.issues.extend(mapping.report.issues)
+        report.metadata.update(mapping.report.metadata)
+        if report.ok:
+            report.add(
+                "info",
+                "mapping_checks_passed",
+                "All processes, exchanges, providers, amounts, and methods can be mapped "
+                "to Brightway",
+            )
+        report.metadata["mapping_ok"] = report.ok
+    else:
+        report.metadata["mapping_ok"] = None
         report.add(
-            "info",
-            "mapping_checks_passed",
-            "All processes, exchanges, providers, amounts, and methods can be mapped "
-            "to Brightway",
+            "info", "mapping_checks_skipped", "Mapping was skipped because package checks failed"
         )
     report.add(
         "info",
@@ -125,7 +140,11 @@ def import_tidas(
     strict_references: bool = False,
     max_json_mib: int = 128,
     brightway_dir: str | Path | None = None,
+    allow_rounding: bool = False,
+    absolute_tolerance: str = "0",
+    relative_tolerance: str = "0",
 ) -> MigrationReport:
+    precision = PrecisionPolicy(allow_rounding, absolute_tolerance, relative_tolerance)
     package, validation = _read_and_check_import_basics(
         source,
         strict_references=strict_references,
@@ -145,6 +164,7 @@ def import_tidas(
         package,
         database=database,
         biosphere_database=target_biosphere,
+        precision=precision,
     ).build()
     payload.report.issues = [*validation.issues, *payload.report.issues]
     payload.report.metadata["project"] = project
@@ -219,7 +239,7 @@ def export_tidas(
         parameter_counts=parameter_counts,
         source_database_metadata=source_database_metadata,
     ).build()
-    package = TidasPackage(records=records, source=f"{project}/{database}")
+    package = TidasPackage(records=records, source=f"{project}/{database}", manifest=manifest)
     validation = validate_package(
         package,
         require_open=True,

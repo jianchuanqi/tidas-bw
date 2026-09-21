@@ -29,7 +29,7 @@ uv run tidas-bw --help
 tidas-bw validate tiangong-open-data.zip --strict-references
 ```
 
-导入前完整预检——运行导入的全部检查（格式、许可、引用、数值精度、不确定性、供应者解析），**绝不创建或修改任何 Brightway 数据**，并在报告中区分“包校验通过”与“可映射”两类结论：
+导入前完整预检——运行数据与映射检查（格式、许可、引用、数值精度、不确定性、供应者解析；目标项目中的重名和替换依赖另在实际导入时检查），**绝不创建或修改任何 Brightway 数据**，并在报告中区分“包校验通过”与“可映射”两类结论：
 
 ```bash
 tidas-bw preflight tiangong-open-data.zip \
@@ -93,9 +93,20 @@ tidas-bw export \
 
 含变量的交换会以已经求值的 `resultingAmount` 进入 Brightway，并给出“参数化已冻结”的提示；原公式仍保存在原始 TIDAS 元数据中。
 
-**数值精度**：TIDAS 原始十进制值始终完整保存在 TIDAS 文档元数据中；写入 Brightway 的每一步都使用该步可用的最高精度（已实测：bw2data 4.7 交换存储与 bw2calc 2.5.0 计算矩阵均为 float64）。无法被 float64 精确表示的十进制数会自动舍入到最近的可表示值，迁移报告以 info 级别给出原值、舍入值和绝对/相对误差——舍入会明确记录，不会静默发生，也不作为失败处理。超出 float64 范围（溢出、下溢为 0）或非有限数值仍然拒绝。
+**数值精度**：默认保留严格的十进制往返检查，即原值须满足 `Decimal(str(float(原值))) == Decimal(原值)`。这允许 `0.01` 等普通小数，不代表二进制浮点能精确表示所有十进制数，更不代表 LCI/LCIA 结果没有计算误差。高精度小数若不满足该检查，会在写库前停止。
 
-**不确定性**：TIDAS 规范定义的五种分布按规范原文换算，映射为 Brightway 的 uncertainty type 0-4。换算出处是 tidas-spec 中 `relativeStandardDeviation95In` 字段的规范定义：normal 的字段为“均值±2SD”的百分比，σ = |均值| × 字段 ÷ 200；log-normal 的字段为 SDg² 的百分比，scale = ln(SDg)，均值作为几何中位数（loc = ln(均值)）；uniform 直接使用 minimum/maximum，并要求均值落在区间内。triangular 因规范未定义众数参数、无法保证语义不变而拒绝；参数缺失或矛盾（如 normal 附带 min/max、log-normal 的 SDg² < 1、uniform 区间不含均值）会给出精确拒绝原因。零方差声明（normal 字段为 0、log-normal 的 SDg = 1）按确定性映射并记录 info。映射结果经带种子的抽样统计验证。区域化环境交换或区域化表征因子仍会被拒绝，不会静默丢失。
+如需接受近似，必须显式指定 `--allow-rounding` 和适合数据用途的容差。例如，下例中的容差仅作演示，并非通用验收标准：
+
+```bash
+tidas-bw preflight data.zip --database example \
+  --allow-rounding --absolute-tolerance 0 --relative-tolerance 1e-15
+```
+
+`import` 使用同样的选项。Python API 对应 `allow_rounding=True, absolute_tolerance="0", relative_tolerance="1e-15"`。绝对和相对容差默认均为零；允许误差为 `绝对容差 + 相对容差 × |原值|`，零附近由绝对容差控制。显式近似模式对每个交换量、表征因子及分布上下界检查实际 float64 表示误差，超限停止。报告的 `metadata.numeric_conversions` 逐条记录原值、目标值、精确二进制值、误差和容差；高精度舍入同时给出 warning。非有限数、溢出和下溢为零始终拒绝。
+
+导入使用显式 float64 数组保存计算系数及不确定性参数，避免 bw-processing 1.6 默认迭代器中的 float32 中间转换。测试同时读取 Brightway 保存值和实际计算矩阵，并比较独立解析 LCI/LCIA 答案。原始文档始终另行保留；恢复文档不等于计算无损。此保证针对本工具完成的导入；随后直接调用 Brightway 自身的 `process()` 或修改数据会重新使用其处理流程。计算结果容差仍须针对具体模型另行验收，输入转换容差不是结果误差上限。
+
+**不确定性**：支持独立的正态、正值对数正态和均匀分布，适用于交换及 LCIA 因子；Brightway 编号分别为 3、2、4，正态标准差写入 `scale`。公式、来源、单位和不支持范围见 [迁移约定](docs/migration-contract.md)。三种分布均通过实际 Brightway 随机 LCI/LCIA 计算、参数往返和修改检测。三角分布、缺失或矛盾参数、无法表示的数值范围、声明的相关性、带变量乘数的不确定交换、区域化交换和区域化表征因子继续拒绝。只有明确的零方差声明才可按确定性处理，溢出或下溢不能作为零方差。
 
 ### Brightway → TIDAS
 
@@ -110,7 +121,7 @@ tidas-bw export \
 
 ## 开放数据边界
 
-- 许可证据的存放位置与官方 TIDAS eILCD/XSD 保持一致（已用 tidas-tools 0.2.1 实测）：过程、流、来源、LCIA 方法、生命周期模型直接携带许可字段并逐一证明开放许可；联系人、流属性、单位组记录的 XSD 不允许携带许可字段，它们的许可随包继承——但这类记录一旦声明了限制性许可或独占访问，仍会被拒绝；
+- 过程、流、来源、LCIA 方法、生命周期模型在官方支持的字段中逐条证明开放许可。联系人、流属性、单位组使用根目录 `manifest.json` 的 `license_evidence`，逐条列出记录身份、许可证、权利人、来源及文档摘要；不继承主过程许可。缺证据、摘要不匹配或限制性许可都会停止。该清单与官方 tidas 0.2.1 完整校验兼容；官方格式校验本身不验证许可权属。格式和填写示例见 [迁移约定](docs/migration-contract.md)；
 - `None` 或“未写限制”不等于授予开放许可；
 - CC BY-NC、CC BY-ND、禁止商业使用、禁止再分发、仅内部研究、专有或收费许可会被拒绝；
 - 许可声明与使用限制会分别审查，开放许可后附带的限制条款不能被忽略；

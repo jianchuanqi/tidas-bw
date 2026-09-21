@@ -24,9 +24,9 @@ def test_normal_uses_specified_2sd_percentage() -> None:
         distribution="normal", rsd95="20", minimum=None, maximum=None, amount=2.5
     )
     assert result.error is None
-    assert result.fields["uncertainty type"] == 2
+    assert result.fields["uncertainty type"] == 3
     assert result.fields["loc"] == pytest.approx(2.5)
-    assert result.fields["sigma"] == pytest.approx(2.5 * 20 / 200)
+    assert result.fields["scale"] == pytest.approx(2.5 * 20 / 200)
 
 
 def test_normal_sigma_is_positive_for_negative_amounts() -> None:
@@ -34,7 +34,7 @@ def test_normal_sigma_is_positive_for_negative_amounts() -> None:
         distribution="normal", rsd95="10", minimum=None, maximum=None, amount=-3.0
     )
     assert result.error is None
-    assert result.fields["sigma"] == pytest.approx(3.0 * 10 / 200)
+    assert result.fields["scale"] == pytest.approx(3.0 * 10 / 200)
     assert result.fields["loc"] == pytest.approx(-3.0)
 
 
@@ -44,7 +44,7 @@ def test_lognormal_interprets_field_as_sdg_squared_percentage() -> None:
         distribution="log-normal", rsd95="125", minimum=None, maximum=None, amount=2.0
     )
     assert result.error is None
-    assert result.fields["uncertainty type"] == 1
+    assert result.fields["uncertainty type"] == 2
     assert result.fields["loc"] == pytest.approx(np.log(2.0))
     assert result.fields["scale"] == pytest.approx(0.5 * np.log(1.25))
 
@@ -55,7 +55,7 @@ def test_uniform_maps_min_max_and_requires_amount_inside() -> None:
     )
     assert result.error is None
     assert result.fields == {
-        "uncertainty type": 3,
+        "uncertainty type": 4,
         "minimum": pytest.approx(0.9),
         "maximum": pytest.approx(1.1),
     }
@@ -111,7 +111,7 @@ def test_sampled_moments_match_spec_conversion_formulas() -> None:
         distribution="normal", rsd95="20", minimum=None, maximum=None, amount=1.0
     )
     samples = rng.normal(
-        loc=normal.fields["loc"], scale=normal.fields["sigma"], size=SAMPLES
+        loc=normal.fields["loc"], scale=normal.fields["scale"], size=SAMPLES
     )
     assert abs(samples.mean() - 1.0) < 0.002
     assert abs(samples.std() - 0.1) < 0.002
@@ -178,8 +178,8 @@ def test_exchange_uncertainty_maps_into_brightway_payload() -> None:
     ]
     assert len(uncertain_exchanges) == 1
     fields = uncertain_exchanges[0]
-    assert fields["uncertainty type"] == 2
-    assert fields["sigma"] == pytest.approx(fields["amount"] * 20 / 200)
+    assert fields["uncertainty type"] == 3
+    assert fields["scale"] == pytest.approx(fields["amount"] * 20 / 200)
 
 
 def test_imported_uncertainty_roundtrips_and_detects_brightway_edits(
@@ -193,7 +193,7 @@ def test_imported_uncertainty_roundtrips_and_detects_brightway_edits(
     source = tmp_path / "package"
     from tidas_bw.package import write_package
 
-    write_package(package.records, source)
+    write_package(package.records, source, manifest=package.manifest)
 
     brightway_dir = Path(isolated_brightway_dir)
     report = import_tidas(
@@ -211,7 +211,7 @@ def test_imported_uncertainty_roundtrips_and_detects_brightway_edits(
         for exchange in dataset["exchanges"]
         if exchange.get("type") == "technosphere"
     )
-    assert exchange["uncertainty type"] == 2
+    assert exchange["uncertainty type"] == 3
 
     unchanged = export_tidas(
         project="uncertainty-roundtrip",
@@ -225,7 +225,7 @@ def test_imported_uncertainty_roundtrips_and_detects_brightway_edits(
     for dataset in data.values():
         for exchange in dataset.get("exchanges", []):
             if "uncertainty type" in exchange:
-                exchange["sigma"] = exchange["sigma"] * 2
+                exchange["scale"] = exchange["scale"] * 2
     bd.Database("uncertainty-db").write(data)
 
     edited = export_tidas(

@@ -20,6 +20,10 @@ classifiers = [
 ]
 dependencies = [
   "bw2data>=4.7,<5",
+  "bw-processing>=1.6,<2",
+  "numpy>=2,<3",
+  "stats-arrays>=2,<3",
+  "fsspec>=2024",
   "tidas-sdk>=0.2.14,<0.3",
 ]
 
