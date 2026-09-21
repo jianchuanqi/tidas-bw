@@ -100,6 +100,7 @@ jobs:
                   (foreground, "p"): {
                       "name": "native process",
                       "unit": "kilogram",
+                      "location": "GLO",
                       "type": "process",
                       "reference product": "product p",
                       "exchanges": [
@@ -117,17 +118,13 @@ jobs:
                   }
               }
           )
-          bd.databases[foreground].update(
-              {
-                  "license": "CC BY 4.0",
-                  "owner": "CI synthetic owner",
-                  "source": "CI synthetic foreground fixture",
-              }
-          )
           report = export_tidas(
               project="native-cross-tool",
               database=foreground,
               output="build/cross-tool/native-export",
+              license="CC BY 4.0",
+              owner="CI synthetic owner",
+              source="CI synthetic foreground fixture",
           )
           assert report.ok, report.to_dict()
           PY
