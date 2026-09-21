@@ -129,8 +129,8 @@ def test_quantified_uncertainty_is_rejected_instead_of_silently_dropped() -> Non
     ).build()
 
     codes = {issue.code for issue in payload.report.issues}
-    assert "unsupported_exchange_uncertainty" in codes
-    assert "unsupported_lcia_uncertainty" in codes
+    assert "unmappable_exchange_uncertainty" in codes
+    assert "unmappable_lcia_uncertainty" in codes
     assert not payload.report.ok
 
 

@@ -26,6 +26,7 @@ from .templates import (
     stable_uuid,
     unit_group_document,
 )
+from .uncertainty import convert_uncertainty
 from .utils import as_list, deep_get, multilingual, number_string, pick_text, semantic_hash
 
 # Categories whose eILCD/XSD projection accepts the standard licence fields
@@ -34,6 +35,17 @@ from .utils import as_list, deep_get, multilingual, number_string, pick_text, se
 # categories must not carry them (issue #1).
 LICENSE_FIELD_CATEGORIES = frozenset(
     {"processes", "flows", "sources", "lifecyclemodels", "lciamethods"}
+)
+
+# Brightway exchange fields that describe a quantified uncertainty.
+BW_UNCERTAINTY_FIELDS = (
+    "uncertainty type",
+    "loc",
+    "scale",
+    "sigma",
+    "minimum",
+    "maximum",
+    "negative",
 )
 
 PROCESS_TYPES = {
@@ -436,21 +448,13 @@ class BrightwayExporter:
                     f"Brightway exchange {internal_id} changed location metadata",
                     dataset=str(dataset.get("code") or dataset.get("name")),
                 )
-            unsupported_fields = {
-                "formula",
-                "parameters",
-                "uncertainty type",
-                "loc",
-                "scale",
-                "shape",
-                "minimum",
-                "maximum",
-            }.intersection(exchange)
+            unsupported_fields = {"formula", "parameters"}.intersection(exchange)
             if unsupported_fields:
                 self.report.add(
                     "error",
                     "unsupported_brightway_exchange_metadata",
-                    f"Brightway exchange {internal_id} gained unsupported parameter or uncertainty fields: {', '.join(sorted(unsupported_fields))}",
+                    f"Brightway exchange {internal_id} gained unsupported parameter fields: "
+                    f"{', '.join(sorted(unsupported_fields))}",
                     dataset=str(dataset.get("code") or dataset.get("name")),
                 )
             amount = _brightway_amount(
@@ -461,6 +465,9 @@ class BrightwayExporter:
             )
             if amount is None:
                 continue
+            self._verify_exchange_uncertainty(
+                exchange, tidas, amount, dataset=str(dataset.get("code") or dataset.get("name"))
+            )
             if expected_type == "production" and amount <= 0:
                 self.report.add(
                     "error",
@@ -496,6 +503,56 @@ class BrightwayExporter:
                 "removed_brightway_exchange",
                 f"Mapped TIDAS exchange {internal_id} was removed in Brightway",
                 dataset=str(dataset.get("code") or dataset.get("name")),
+            )
+
+    def _verify_exchange_uncertainty(
+        self,
+        exchange: Mapping[str, Any],
+        tidas: Mapping[str, Any],
+        amount: float,
+        *,
+        dataset: str,
+    ) -> None:
+        """Compare the Brightway uncertainty fields with the preserved TIDAS declaration."""
+        internal_id = tidas.get("internal_id") or exchange.get("output") or exchange.get("input")
+        document = tidas.get("document")
+        actual = {
+            key: exchange[key] for key in BW_UNCERTAINTY_FIELDS if key in exchange
+        }
+        if not isinstance(document, Mapping):
+            if actual:
+                self.report.add(
+                    "error",
+                    "unverifiable_exchange_uncertainty",
+                    f"Brightway exchange {internal_id} has uncertainty fields but the "
+                    "preserved TIDAS document is unavailable for comparison",
+                    dataset=dataset,
+                )
+            return
+        expected = convert_uncertainty(
+            distribution=document.get("uncertaintyDistributionType"),
+            rsd95=document.get("relativeStandardDeviation95In"),
+            minimum=document.get("minimumAmount"),
+            maximum=document.get("maximumAmount"),
+            amount=amount,
+        )
+        if expected.error:
+            self.report.add(
+                "error",
+                "unverifiable_exchange_uncertainty",
+                f"The preserved TIDAS uncertainty of exchange {internal_id} can no longer "
+                f"be mapped: {expected.error}",
+                dataset=dataset,
+            )
+            return
+        if _uncertainty_signature(actual) != _uncertainty_signature(expected.fields):
+            self.report.add(
+                "error",
+                "changed_exchange_uncertainty",
+                f"Brightway exchange {internal_id} changed uncertainty: expected "
+                f"{_uncertainty_signature(expected.fields)}, found "
+                f"{_uncertainty_signature(actual)}",
+                dataset=dataset,
             )
 
     def _synthesise_records(self) -> list[DatasetRecord]:
@@ -671,6 +728,25 @@ class BrightwayExporter:
                     dataset=f"{key[0]}:{key[1]}",
                 )
                 production_amount = Decimal("1")
+            production_uncertainty = {
+                field_name: production[0][field_name]
+                for field_name in BW_UNCERTAINTY_FIELDS
+                if field_name in production[0]
+                and not (
+                    field_name == "uncertainty type"
+                    and production[0][field_name] in (None, 0)
+                )
+                and not (field_name == "negative" and production[0][field_name] is False)
+            }
+            if production_uncertainty:
+                self.report.add(
+                    "error",
+                    "unsupported_native_exchange_uncertainty",
+                    "Native Brightway reference production uncertainty cannot yet be "
+                    f"exported to TIDAS without changing its statistical meaning: "
+                    f"{production_uncertainty}",
+                    dataset=f"{key[0]}:{key[1]}",
+                )
             exchanges = [
                 process_exchange(
                     0,
@@ -684,6 +760,22 @@ class BrightwayExporter:
             for exchange in dataset.get("exchanges", []):
                 exchange_type = exchange.get("type")
                 if exchange is production[0] or exchange_type == "production":
+                    continue
+                native_uncertainty = {
+                    key: exchange[key]
+                    for key in BW_UNCERTAINTY_FIELDS
+                    if key in exchange
+                    and not (key == "uncertainty type" and exchange[key] in (None, 0))
+                    and not (key == "negative" and exchange[key] is False)
+                }
+                if native_uncertainty:
+                    self.report.add(
+                        "error",
+                        "unsupported_native_exchange_uncertainty",
+                        "Native Brightway exchange uncertainty cannot yet be exported to "
+                        f"TIDAS without changing its statistical meaning: {native_uncertainty}",
+                        dataset=f"{key[0]}:{key[1]}",
+                    )
                     continue
                 input_key = _input_key(exchange)
                 if input_key is None:
@@ -1343,6 +1435,25 @@ def _decimal_value(value: Any) -> Decimal | None:
     return result if result.is_finite() else None
 
 
+def _uncertainty_signature(fields: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
+    """Canonical, order-stable signature of an uncertainty field mapping."""
+    result: list[tuple[str, Any]] = []
+    for key, value in fields.items():
+        result.append((str(key), _canonical_value(value)))
+    return tuple(sorted(result))
+
+
+def _canonical_value(value: Any) -> Any:
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, int | float):
+        return round(float(value), 12)
+    try:
+        return round(float(str(value)), 12)
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def _factor_signature(rows: Any) -> list[tuple[str, str, str, str]]:
     result: list[tuple[str, str, str, str]] = []
     for row in as_list(rows):
@@ -1355,8 +1466,13 @@ def _factor_signature(rows: Any) -> list[tuple[str, str, str, str]]:
             amount = number_string(row[1])
         except (InvalidOperation, TypeError, ValueError):
             amount = str(row[1])
-        location = str(row[2]) if len(row) > 2 and row[2] is not None else ""
-        result.append((str(key[0]), str(key[1]), amount, location))
+        extra = ""
+        if len(row) > 2 and row[2] is not None:
+            if isinstance(row[2], Mapping):
+                extra = repr(_uncertainty_signature(row[2]))
+            else:
+                extra = str(row[2])
+        result.append((str(key[0]), str(key[1]), amount, extra))
     return sorted(result)
 
 

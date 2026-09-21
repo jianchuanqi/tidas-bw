@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tidas-bw"
-version = "0.2.0"
+version = "0.3.0"
 description = "Bidirectional migration between TIDAS packages and Brightway 2.5"
 readme = "README.md"
 requires-python = ">=3.12"

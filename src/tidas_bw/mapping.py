@@ -16,18 +16,8 @@ from .models import (
     MigrationReport,
 )
 from .package import TidasPackage
+from .uncertainty import convert_uncertainty
 from .utils import as_list, deep_get, number_string, pick_text, reference_uuid
-
-EXCHANGE_UNCERTAINTY_FIELDS = (
-    "minimumAmount",
-    "maximumAmount",
-    "relativeStandardDeviation95In",
-)
-FACTOR_UNCERTAINTY_FIELDS = (
-    "minimumValue",
-    "maximumValue",
-    "relativeStandardDeviation95In",
-)
 
 
 class TidasMapper:
@@ -336,14 +326,41 @@ class TidasMapper:
         direction = str(exchange.get("exchangeDirection", ""))
         exchange_location = _exchange_location(exchange)
         flow_type = _flow_type(flow)
-        if _has_quantified_uncertainty(exchange, EXCHANGE_UNCERTAINTY_FIELDS):
+        uncertainty = convert_uncertainty(
+            distribution=exchange.get("uncertaintyDistributionType"),
+            rsd95=exchange.get("relativeStandardDeviation95In"),
+            minimum=exchange.get("minimumAmount"),
+            maximum=exchange.get("maximumAmount"),
+            amount=amount,
+        )
+        if uncertainty.error:
             self.report.add(
                 "error",
-                "unsupported_exchange_uncertainty",
-                "Exchange uncertainty cannot yet be represented without changing its statistical meaning",
+                "unmappable_exchange_uncertainty",
+                uncertainty.error,
                 dataset=process.identity,
                 path=f"exchange:{internal_id}",
             )
+        for note in uncertainty.notes:
+            self.report.add(
+                "info",
+                "exchange_uncertainty_note",
+                note,
+                dataset=process.identity,
+                path=f"exchange:{internal_id}",
+            )
+        if uncertainty.fields:
+            self.report.add(
+                "info",
+                "exchange_uncertainty_mapped",
+                "Mapped exchange uncertainty to Brightway fields: "
+                + ", ".join(
+                    f"{key}={value!r}" for key, value in sorted(uncertainty.fields.items())
+                ),
+                dataset=process.identity,
+                path=f"exchange:{internal_id}",
+            )
+        uncertainty_fields = dict(uncertainty.fields) if not uncertainty.error else {}
         metadata = {
             "internal_id": internal_id,
             "flow_uuid": flow.uuid,
@@ -378,6 +395,7 @@ class TidasMapper:
                 "type": "production",
                 "name": _flow_name(flow),
                 "unit": self._unit_for_flow(flow),
+                **uncertainty_fields,
                 "tidas": metadata,
             }
         if flow_type == "Elementary flow":
@@ -403,6 +421,7 @@ class TidasMapper:
                 "type": "biosphere",
                 "name": _flow_name(flow),
                 "unit": self._unit_for_flow(flow),
+                **uncertainty_fields,
                 "tidas": metadata,
             }
         if flow_type != "Product flow":
@@ -437,6 +456,7 @@ class TidasMapper:
                 "type": "technosphere",
                 "name": _flow_name(flow),
                 "unit": self._unit_for_flow(flow),
+                **uncertainty_fields,
                 "tidas": metadata,
             }
         self.report.add(
@@ -840,14 +860,6 @@ class TidasMapper:
                 flow_uuid = reference_uuid(factor.get("referenceToFlowDataSet"))
                 if not flow_uuid:
                     continue
-                if _has_quantified_uncertainty(factor, FACTOR_UNCERTAINTY_FIELDS):
-                    self.report.add(
-                        "error",
-                        "unsupported_lcia_uncertainty",
-                        "LCIA factor uncertainty cannot yet be represented without changing its statistical meaning",
-                        dataset=record.identity,
-                    )
-                    continue
                 flow = self.flows.get(flow_uuid.lower())
                 if flow is None or _flow_type(flow) != "Elementary flow":
                     self.report.add(
@@ -921,6 +933,39 @@ class TidasMapper:
                         rounded=amount,
                         dataset=record.identity,
                     )
+                uncertainty = convert_uncertainty(
+                    distribution=factor.get("uncertaintyDistributionType"),
+                    rsd95=factor.get("relativeStandardDeviation95In"),
+                    minimum=factor.get("minimumValue"),
+                    maximum=factor.get("maximumValue"),
+                    amount=amount,
+                )
+                if uncertainty.error:
+                    self.report.add(
+                        "error",
+                        "unmappable_lcia_uncertainty",
+                        uncertainty.error,
+                        dataset=record.identity,
+                    )
+                    continue
+                for note in uncertainty.notes:
+                    self.report.add(
+                        "info",
+                        "lcia_uncertainty_note",
+                        note,
+                        dataset=record.identity,
+                    )
+                if uncertainty.fields:
+                    self.report.add(
+                        "info",
+                        "lcia_uncertainty_mapped",
+                        f"Mapped LCIA factor uncertainty for flow {flow_uuid} to Brightway "
+                        "fields: "
+                        + ", ".join(
+                            f"{key}={value!r}" for key, value in sorted(uncertainty.fields.items())
+                        ),
+                        dataset=record.identity,
+                    )
                 location = factor.get("location")
                 if location:
                     self.report.add(
@@ -931,7 +976,10 @@ class TidasMapper:
                     )
                     continue
                 key = (self.biosphere_database, flow_uuid.lower())
-                factors.append((key, amount))
+                if uncertainty.fields:
+                    factors.append((key, amount, dict(uncertainty.fields)))
+                else:
+                    factors.append((key, amount))
             # The unit chain is authoritative; short descriptions are only labels.
             method_unit = self._method_unit(root, record)
             methods.append(
@@ -1080,20 +1128,6 @@ def _report_rounding(
         dataset=dataset,
         path=path,
     )
-
-
-def _has_quantified_uncertainty(
-    data: Mapping[str, Any],
-    numeric_fields: tuple[str, ...],
-) -> bool:
-    if any(_has_value(data.get(field)) for field in numeric_fields):
-        return True
-    distribution = str(data.get("uncertaintyDistributionType") or "").strip().lower()
-    return bool(distribution and distribution != "undefined")
-
-
-def _has_value(value: Any) -> bool:
-    return value is not None and (not isinstance(value, str) or bool(value.strip()))
 
 
 def _exchange_location(exchange: Mapping[str, Any]) -> str | None:
