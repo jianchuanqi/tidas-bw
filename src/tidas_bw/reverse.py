@@ -10,6 +10,7 @@ from math import isfinite
 from typing import Any
 from uuid import UUID
 
+from .license_evidence import license_evidence
 from .licenses import is_open_license, is_restricted_license
 from .models import DatasetRecord, MigrationReport
 from .package import record_from_document
@@ -139,6 +140,17 @@ class BrightwayExporter:
                 for key, value in sorted(self.data.items())
             ],
         }
+        if mode == "preserved-tidas":
+            preserved_manifest = self.metadata.get("tidas_bw", {}).get("package_manifest", {})
+            manifest["license_evidence"] = deepcopy(preserved_manifest.get("license_evidence", {}))
+        elif mode == "native-brightway":
+            # These are newly synthesised template records, not imported third-party
+            # structural datasets. External flow data retain their own provenances.
+            manifest["license_evidence"] = license_evidence(
+                records, license="MIT License", owner="tidas-bw contributors",
+                source="https://github.com/jianchuanqi/tidas-bw/blob/main/LICENSE; "
+                       "structural records newly generated from tidas-bw templates",
+            )
         self.report.counts.update(_counts(records))
         if self.native_provenance:
             manifest["native_provenance"] = deepcopy(self.native_provenance)
@@ -534,7 +546,7 @@ class BrightwayExporter:
             rsd95=document.get("relativeStandardDeviation95In"),
             minimum=document.get("minimumAmount"),
             maximum=document.get("maximumAmount"),
-            amount=amount,
+            amount=float(amount),
         )
         if expected.error:
             self.report.add(
@@ -1447,9 +1459,9 @@ def _canonical_value(value: Any) -> Any:
     if isinstance(value, bool):
         return str(value)
     if isinstance(value, int | float):
-        return round(float(value), 12)
+        return float(value)
     try:
-        return round(float(str(value)), 12)
+        return float(str(value))
     except (TypeError, ValueError):
         return str(value)
 
@@ -1463,7 +1475,8 @@ def _factor_signature(rows: Any) -> list[tuple[str, str, str, str]]:
         if not isinstance(key, tuple | list) or len(key) != 2:
             continue
         try:
-            amount = number_string(row[1])
+            amount = (repr(_uncertainty_signature(row[1]))
+                      if isinstance(row[1], Mapping) else number_string(row[1]))
         except (InvalidOperation, TypeError, ValueError):
             amount = str(row[1])
         extra = ""

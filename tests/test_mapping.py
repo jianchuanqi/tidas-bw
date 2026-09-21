@@ -156,7 +156,7 @@ def test_exchange_location_anchor_precedes_consumer_location_fallback() -> None:
     consumer.document["processDataSet"]["exchanges"]["exchange"][1]["location"] = "US"
     records = [record for record in package.records if record.category != "lifecyclemodels"]
     records.append(record_from_document(us_document, source_path="generated/us-supplier"))
-    anchored = TidasPackage(records=records, source=package.source)
+    anchored = TidasPackage(records=records, source=package.source, manifest=package.manifest)
 
     validation = validate_package(anchored, require_open=True, strict_references=True)
     assert validation.ok, validation.to_dict()
@@ -198,7 +198,7 @@ def test_product_flow_supply_location_precedes_consumer_location_fallback() -> N
     ] = "US"
     records = [record for record in package.records if record.category != "lifecyclemodels"]
     records.append(record_from_document(us_document, source_path="generated/us-flow-supplier"))
-    anchored = TidasPackage(records=records, source=package.source)
+    anchored = TidasPackage(records=records, source=package.source, manifest=package.manifest)
 
     validation = validate_package(anchored, require_open=True, strict_references=True)
     assert validation.ok, validation.to_dict()
@@ -315,7 +315,7 @@ def test_zero_and_unrepresentable_reference_amounts_fail_preflight() -> None:
         )
 
 
-def test_high_precision_amount_is_rounded_and_reported_not_rejected() -> None:
+def test_high_precision_amount_requires_explicit_rounding() -> None:
     package = make_two_process_package()
     supplier = next(
         record
@@ -333,11 +333,16 @@ def test_high_precision_amount_is_rounded_and_reported_not_rejected() -> None:
         biosphere_database="foreground-biosphere",
     ).build()
 
+    assert not payload.report.ok
+    assert any(i.code == "unrepresentable_exchange_precision" for i in payload.report.issues)
+    from tidas_bw.precision import PrecisionPolicy
+    payload = TidasMapper(package, database="foreground", biosphere_database="foreground-biosphere",
+                          precision=PrecisionPolicy(True, "0", "1e-15")).build()
     assert payload.report.ok
     rounded = [
         issue
         for issue in payload.report.issues
-        if issue.code == "exchange_amount_rounded" and issue.severity == "info"
+        if issue.code == "exchange_amount_rounded" and issue.severity == "warning"
     ]
     assert len(rounded) == 1
     assert "0.123456789012345678" in rounded[0].message

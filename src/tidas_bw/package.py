@@ -171,6 +171,7 @@ class TidasPackage:
     records: list[DatasetRecord]
     source: str
     ignored_json: list[str] = field(default_factory=list)
+    manifest: dict[str, Any] = field(default_factory=dict)
 
     def by_category(self, category: str) -> list[DatasetRecord]:
         return [record for record in self.records if record.category == category]
@@ -229,6 +230,7 @@ def read_package(path: str | Path, *, max_json_mib: int = 128) -> TidasPackage:
     else:
         raise PackageError("TIDAS input must be a directory or ZIP package")
 
+    manifest: dict[str, Any] = {}
     records: list[DatasetRecord] = []
     ignored: list[str] = []
     seen: set[tuple[str, str, str]] = set()
@@ -237,6 +239,11 @@ def read_package(path: str | Path, *, max_json_mib: int = 128) -> TidasPackage:
             payload = json.loads(raw, parse_constant=_reject_json_constant)
         except (UnicodeDecodeError, ValueError) as exc:
             raise PackageError(f"malformed JSON in {name}: {exc}") from exc
+        if name == "manifest.json":
+            if not isinstance(payload, dict):
+                raise PackageError("manifest.json must contain an object")
+            manifest = payload
+            continue
         if not isinstance(payload, Mapping):
             ignored.append(name)
             continue
@@ -271,7 +278,7 @@ def read_package(path: str | Path, *, max_json_mib: int = 128) -> TidasPackage:
         )
     if not records:
         raise PackageError(f"no TIDAS datasets found in {source}")
-    return TidasPackage(records=records, source=str(source), ignored_json=ignored)
+    return TidasPackage(records=records, source=str(source), ignored_json=ignored, manifest=manifest)
 
 
 def record_from_document(

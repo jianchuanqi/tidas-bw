@@ -38,12 +38,14 @@ jobs:
           uv run python - <<'PY'
           from copy import deepcopy
           from pathlib import Path
-          from tests._fixtures import make_two_process_package
+          from tests._fixtures import make_two_process_package, with_lcia_method, stable_uuid
           from tidas_bw.package import read_package, write_package, record_from_document
+          from tidas_bw import validate_tidas, preflight_import
 
           root = Path("build/cross-tool")
           fixture = root / "fixture"
-          write_package(make_two_process_package().records, fixture)
+          package = make_two_process_package()
+          write_package(package.records, fixture, manifest=package.manifest)
 
           records = []
           for record in read_package(fixture).records:
@@ -59,22 +61,41 @@ jobs:
                   ):
                       publication.pop(field, None)
               records.append(record_from_document(document, source_path=record.source_path))
-          write_package(records, root / "stripped")
+          write_package(records, root / "stripped", manifest=package.manifest)
+          for path in (fixture, root / "stripped"):
+              report = validate_tidas(path, strict_references=True)
+              assert report.ok, report.to_dict()
+          # Official schemas alone cannot establish record-scoped licence coverage.
+          write_package(package.records, root / "missing-evidence")
+          assert not validate_tidas(root / "missing-evidence", strict_references=True).ok
+          uncertain, _ = with_lcia_method(make_two_process_package())
+          consumer = next(r for r in uncertain.by_category("processes") if r.uuid == stable_uuid("test:process:consumer"))
+          exchanges = consumer.document["processDataSet"]["exchanges"]["exchange"]
+          exchanges[1].update(uncertaintyDistributionType="log-normal", relativeStandardDeviation95In="125")
+          exchanges[2].update(uncertaintyDistributionType="uniform", minimumAmount="0.005", maximumAmount="0.015")
+          factor = uncertain.by_category("lciamethods")[0].document["LCIAMethodDataSet"]["characterisationFactors"]["factor"]
+          factor.update(uncertaintyDistributionType="normal", relativeStandardDeviation95In="20")
+          write_package(uncertain.records, root / "uncertainty", manifest=uncertain.manifest)
+          result = preflight_import(root / "uncertainty", database="probe", strict_references=True)
+          assert result.ok, result.to_dict()
           PY
+          tidas --version
+          uv run python -c 'from importlib.metadata import version; print({p: version(p) for p in ("tidas-sdk", "bw2data", "bw2calc", "bw-processing", "stats-arrays")})'
           tidas validate build/cross-tool/fixture --input-format tidas-json --format json
           tidas validate build/cross-tool/stripped --input-format tidas-json --format json
+          tidas validate build/cross-tool/uncertainty --input-format tidas-json --format json
       - name: Validate a native Brightway export with both validators
         run: |
           uv run python - <<'PY'
           import os
           from pathlib import Path
 
-          import bw2data as bd
-
           from tidas_bw import export_tidas
 
           brightway_dir = Path("build/cross-tool/bw-data")
+          brightway_dir.mkdir(parents=True, exist_ok=True)
           os.environ["BRIGHTWAY2_DIR"] = str(brightway_dir.resolve())
+          import bw2data as bd
           bd.projects.set_current("native-cross-tool")
           biosphere = "native-biosphere"
           bd.Database(biosphere).write(

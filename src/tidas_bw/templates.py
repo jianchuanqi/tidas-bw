@@ -77,8 +77,7 @@ def publication(uuid: str) -> dict[str, Any]:
     The official TIDAS eILCD/XSD projection rejects ``common:copyright`` and
     ``common:licenseType`` on contact, flow property, and unit group datasets
     (verified with tidas-tools 0.2.1), so generated documents for those
-    categories must not carry licence fields. Their licence evidence follows
-    the package's data-bearing datasets.
+    categories must not carry licence fields. Their record-scoped licence evidence is stored separately in manifest.json.
     """
     return {
         "common:dataSetVersion": VERSION,

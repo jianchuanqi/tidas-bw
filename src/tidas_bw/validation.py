@@ -17,10 +17,11 @@ from tidas_sdk import (
     create_unit_group,
 )
 
+from .license_evidence import STRUCTURAL_CATEGORIES
 from .licenses import is_open_license, is_restricted_license, normalise_license
 from .models import DatasetRecord, MigrationReport
 from .package import TidasPackage
-from .utils import deep_get, pick_text
+from .utils import deep_get, pick_text, semantic_hash
 
 FACTORIES = {
     "processes": create_process,
@@ -46,14 +47,6 @@ REFERENCE_TYPES = {
 
 CORE_REFERENCE_CATEGORIES = {"processes", "flows", "flowproperties", "unitgroups"}
 
-# The official TIDAS eILCD/XSD projection rejects the standard licence fields
-# (common:copyright, common:licenseType, common:accessRestrictions) on these
-# record categories, so generated documents never carry them there and their
-# open licence follows the package's data-bearing datasets (issue #1).
-# Processes, flows, sources, and lifecycle models accept the fields and must
-# still prove an open licence individually.
-STRUCTURAL_LICENCE_CATEGORIES = frozenset({"contacts", "flowproperties", "unitgroups"})
-
 
 def validate_package(
     package: TidasPackage,
@@ -71,12 +64,38 @@ def validate_package(
         )
     for record in package.records:
         _validate_schema(record, report)
-        _validate_license(record, report, require_open=require_open)
+        _validate_license(record, report, require_open=require_open, manifest=package.manifest)
     _validate_references(package, report, strict=strict_references)
     return report
 
 
 def _validate_schema(record: DatasetRecord, report: MigrationReport) -> None:
+    # SDK 0.2.14 accepts omissions that the official 0.2.1 eILCD projection
+    # rejects. These checks report missing information; they never invent it.
+    if record.category == "lciamethods":
+        root = record.document.get(record.root_key, {})
+        if isinstance(root, Mapping):
+            for key, expected in {
+                "@xmlns": "http://lca.jrc.it/ILCD/LCIAMethod",
+                "@xmlns:common": "http://lca.jrc.it/ILCD/Common",
+            }.items():
+                if root.get(key) != expected:
+                    report.add(
+                        "error",
+                        "eilcd_compatibility",
+                        f"LCIA eILCD projection requires {key}={expected!r}",
+                        dataset=record.identity,
+                        path=f"/{record.root_key}/{key}",
+                    )
+            if not root.get("@version") or not isinstance(
+                deep_get(root, "LCIAMethodInformation", "geography"), Mapping
+            ):
+                report.add(
+                    "error",
+                    "eilcd_compatibility",
+                    "LCIA eILCD requires a schema @version and LCIAMethodInformation/geography; these cannot be omitted even when the SDK accepts them",
+                    dataset=record.identity,
+                )
     try:
         with warnings.catch_warnings():
             warnings.filterwarnings(
@@ -120,6 +139,7 @@ def _validate_license(
     report: MigrationReport,
     *,
     require_open: bool,
+    manifest: Mapping[str, Any],
 ) -> None:
     publication = deep_get(
         record.document,
@@ -166,7 +186,47 @@ def _validate_license(
         )
         return
 
-    if record.category in STRUCTURAL_LICENCE_CATEGORIES:
+    if record.category in STRUCTURAL_CATEGORIES:
+        if any(
+            key in publication
+            for key in ("common:copyright", "common:licenseType", "common:accessRestrictions")
+        ):
+            report.add(
+                "error",
+                "unsupported_structural_license_fields",
+                "Official eILCD rejects licence fields here; provide record-scoped evidence in manifest.json",
+                dataset=record.identity,
+            )
+        evidence_map = manifest.get("license_evidence", {})
+        evidence = evidence_map.get(record.identity) if isinstance(evidence_map, Mapping) else None
+        if (
+            isinstance(evidence, Mapping)
+            and isinstance(evidence.get("license"), str)
+            and is_restricted_license(evidence["license"])
+        ):
+            report.add(
+                "error",
+                "restricted_license",
+                "Manifest declares a restricted licence",
+                dataset=record.identity,
+            )
+            return
+        valid = isinstance(evidence, Mapping) and all(
+            isinstance(evidence.get(key), str) and evidence[key].strip()
+            for key in ("license", "owner", "source", "document_sha256")
+        )
+        if valid:
+            valid = is_open_license(evidence["license"]) and evidence[
+                "document_sha256"
+            ] == semantic_hash(record.document)
+        if require_open and not valid:
+            report.add(
+                "error",
+                "open_license_not_proven",
+                "Structural dataset needs an explicit open licence, owner, source and matching document_sha256 "
+                "under manifest.json/license_evidence/<category:UUID@version>; no inheritance from other datasets",
+                dataset=record.identity,
+            )
         return
 
     open_proven = is_open_license(declared) or (

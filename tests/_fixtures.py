@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from tidas_bw.license_evidence import license_evidence
 from tidas_bw.package import TidasPackage, record_from_document
 from tidas_bw.templates import (
     FORMAT_SOURCE_UUID,
@@ -121,7 +122,10 @@ def make_two_process_package() -> TidasPackage:
         record_from_document(document, source_path=f"generated/{index}")
         for index, document in enumerate(documents)
     ]
-    return TidasPackage(records=records, source="generated-test-package")
+    return TidasPackage(records=records, source="generated-test-package", manifest={
+        "license_evidence": license_evidence(records, license="MIT License", owner="tidas-bw contributors",
+                                             source="Synthetic fixtures authored in tests/_fixtures.py")
+    })
 
 
 def with_lcia_method(
@@ -152,6 +156,11 @@ def with_lcia_method(
     title = "Test climate method"
     document = {
         "LCIAMethodDataSet": {
+            "@xmlns": "http://lca.jrc.it/ILCD/LCIAMethod",
+            "@xmlns:common": "http://lca.jrc.it/ILCD/Common",
+            "@xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+            "@version": "1.1",
+            "@xsi:schemaLocation": "http://lca.jrc.it/ILCD/LCIAMethod ../../schemas/ILCD_LCIAMethodDataSet.xsd",
             "LCIAMethodInformation": {
                 "dataSetInformation": {
                     "common:UUID": method_uuid,
@@ -181,6 +190,7 @@ def with_lcia_method(
                     "duration": multilingual("100 years"),
                     "timeRepresentativenessDescription": multilingual("Synthetic test method"),
                 },
+                "geography": {"interventionLocation": "GLO", "impactLocation": "GLO"},
                 "impactModel": {
                     "modelName": "Synthetic test model",
                     "modelDescription": multilingual("Synthetic test method"),
@@ -225,6 +235,6 @@ def with_lcia_method(
     }
     method_record = record_from_document(document, source_path="generated/lcia-method")
     return (
-        TidasPackage(records=[*package.records, method_record], source=package.source),
+        TidasPackage(records=[*package.records, method_record], source=package.source, manifest=deepcopy(package.manifest)),
         ("TIDAS", "Test methodology", "Climate change", title),
     )

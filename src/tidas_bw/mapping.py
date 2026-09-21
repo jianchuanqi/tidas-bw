@@ -6,7 +6,6 @@ from collections import Counter, defaultdict
 from collections.abc import Mapping
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
-from math import isfinite
 from typing import Any
 
 from .models import (
@@ -16,6 +15,7 @@ from .models import (
     MigrationReport,
 )
 from .package import TidasPackage
+from .precision import PrecisionPolicy
 from .uncertainty import convert_uncertainty
 from .utils import as_list, deep_get, number_string, pick_text, reference_uuid
 
@@ -27,8 +27,10 @@ class TidasMapper:
         *,
         database: str,
         biosphere_database: str,
+        precision: PrecisionPolicy | None = None,
     ) -> None:
         self.package = package
+        self.precision = precision or PrecisionPolicy()
         self.database = database
         self.biosphere_database = biosphere_database
         self.report = MigrationReport(
@@ -36,6 +38,12 @@ class TidasMapper:
             source=package.source,
             target=f"{database} (+ {biosphere_database})",
         )
+        if not database or not biosphere_database or database == biosphere_database:
+            self.report.add(
+                "error",
+                "invalid_database_names",
+                "Technosphere and biosphere names must be non-empty and different",
+            )
         self.exact = package.index()
         self.by_uuid = package.uuid_index()
         self._assert_single_version_per_uuid()
@@ -48,6 +56,14 @@ class TidasMapper:
         self.providers_by_flow = self._reference_providers()
 
     def build(self) -> BrightwayPayload:
+        for record in self.package.records:
+            if _contains_correlation(record.document):
+                self.report.add(
+                    "error",
+                    "unsupported_correlated_uncertainty",
+                    "Declared correlations or covariances cannot be represented by independent Brightway distributions",
+                    dataset=record.identity,
+                )
         biosphere = self._build_biosphere()
         technosphere = self._build_technosphere()
         methods = self._build_methods()
@@ -64,7 +80,9 @@ class TidasMapper:
         ]
         metadata = {
             "format": "tidas-bw-metadata-v1",
+            "calculation_precision": "float64",
             "source": self.package.source,
+            "package_manifest": deepcopy(self.package.manifest),
             "source_counts": self.package.counts(),
             "process_identities": [
                 {"uuid": record.uuid.lower(), "version": record.version}
@@ -311,10 +329,27 @@ class TidasMapper:
         flow = self._flow_for_reference(exchange.get("referenceToFlowDataSet"), process)
         if flow is None:
             return None
-        amount = _exchange_amount(exchange, self.report, process)
+        amount = _exchange_amount(exchange, self.report, process, self.precision)
         if amount is None:
             return None
         internal_id = str(exchange.get("@dataSetInternalID", ""))
+        if str(exchange.get("uncertaintyDistributionType", "undefined")).lower() not in {
+            "",
+            "undefined",
+        } and (
+            exchange.get("referenceToVariable")
+            or not _equal_decimal_amounts(
+                exchange.get("meanAmount"), exchange.get("resultingAmount")
+            )
+        ):
+            self.report.add(
+                "error",
+                "unsupported_parameterized_uncertainty",
+                "Uncertain exchanges require equal meanAmount/resultingAmount and no variable multiplier; variable scaling or shared uncertainty needs an explicit joint model",
+                dataset=process.identity,
+                path=f"exchange:{internal_id}",
+            )
+            return None
         if exchange.get("referenceToVariable"):
             self.report.add(
                 "warning",
@@ -326,6 +361,15 @@ class TidasMapper:
         direction = str(exchange.get("exchangeDirection", ""))
         exchange_location = _exchange_location(exchange)
         flow_type = _flow_type(flow)
+        for field in ("minimumAmount", "maximumAmount"):
+            if exchange.get(field) not in (None, ""):
+                self.precision.convert(
+                    exchange[field],
+                    self.report,
+                    dataset=process.identity,
+                    path=f"exchange:{internal_id}/{field}",
+                    kind="uncertainty_bound",
+                )
         uncertainty = convert_uncertainty(
             distribution=exchange.get("uncertaintyDistributionType"),
             rsd95=exchange.get("relativeStandardDeviation95In"),
@@ -909,30 +953,24 @@ class TidasMapper:
                         dataset=record.identity,
                     )
                     continue
-                try:
-                    decimal_amount = Decimal(str(factor.get("meanValue")))
-                    if not decimal_amount.is_finite():
-                        raise InvalidOperation
-                    amount = float(decimal_amount)
-                    if not isfinite(amount) or (decimal_amount != 0 and amount == 0):
-                        raise InvalidOperation
-                except (InvalidOperation, OverflowError, TypeError, ValueError):
-                    self.report.add(
-                        "error",
-                        "invalid_characterisation_factor",
-                        f"Invalid factor for flow {flow_uuid}",
-                        dataset=record.identity,
-                    )
+                amount = self.precision.convert(
+                    factor.get("meanValue"),
+                    self.report,
+                    dataset=record.identity,
+                    path=f"characterisationFactors:{flow_uuid}",
+                    kind="characterisation_factor",
+                )
+                if amount is None:
                     continue
-                if Decimal(str(amount)) != decimal_amount:
-                    _report_rounding(
-                        self.report,
-                        code="characterisation_factor_rounded",
-                        message_prefix=f"LCIA factor for flow {flow_uuid}",
-                        original=decimal_amount,
-                        rounded=amount,
-                        dataset=record.identity,
-                    )
+                for field in ("minimumValue", "maximumValue"):
+                    if factor.get(field) not in (None, ""):
+                        self.precision.convert(
+                            factor[field],
+                            self.report,
+                            dataset=record.identity,
+                            path=f"characterisationFactors:{flow_uuid}/{field}",
+                            kind="uncertainty_bound",
+                        )
                 uncertainty = convert_uncertainty(
                     distribution=factor.get("uncertaintyDistributionType"),
                     rsd95=factor.get("relativeStandardDeviation95In"),
@@ -977,7 +1015,7 @@ class TidasMapper:
                     continue
                 key = (self.biosphere_database, flow_uuid.lower())
                 if uncertainty.fields:
-                    factors.append((key, amount, dict(uncertainty.fields)))
+                    factors.append((key, {"amount": amount, **uncertainty.fields}))
                 else:
                     factors.append((key, amount))
             # The unit chain is authoritative; short descriptions are only labels.
@@ -989,6 +1027,7 @@ class TidasMapper:
                     metadata={
                         "unit": method_unit,
                         "tidas_database": self.database,
+                        "calculation_precision": "float64",
                         "tidas": {
                             "uuid": record.uuid,
                             "version": record.version,
@@ -1070,63 +1109,16 @@ def _process_has_flow(
 
 
 def _exchange_amount(
-    exchange: Mapping[str, Any], report: MigrationReport, process: DatasetRecord
-) -> float | None:
-    value = exchange.get("resultingAmount", exchange.get("meanAmount"))
-    try:
-        decimal_value = Decimal(str(value))
-        if not decimal_value.is_finite():
-            raise InvalidOperation
-        result = float(decimal_value)
-        if not isfinite(result) or (decimal_value != 0 and result == 0):
-            raise InvalidOperation
-        if Decimal(str(result)) != decimal_value:
-            _report_rounding(
-                report,
-                code="exchange_amount_rounded",
-                message_prefix=f"Exchange amount {value!r}",
-                original=decimal_value,
-                rounded=result,
-                dataset=process.identity,
-                path=f"exchange:{exchange.get('@dataSetInternalID')}",
-            )
-        return result
-    except (InvalidOperation, OverflowError, TypeError, ValueError):
-        report.add(
-            "error",
-            "invalid_exchange_amount",
-            f"Invalid exchange amount {value!r}",
-            dataset=process.identity,
-            path=f"exchange:{exchange.get('@dataSetInternalID')}",
-        )
-        return None
-
-
-def _report_rounding(
+    exchange: Mapping[str, Any],
     report: MigrationReport,
-    *,
-    code: str,
-    message_prefix: str,
-    original: Decimal,
-    rounded: float,
-    dataset: str | None = None,
-    path: str | None = None,
-) -> None:
-    """Record an automatic float64 rounding with its exact error bounds."""
-    stored = Decimal(str(rounded))
-    delta = abs(original - stored)
-    relative = delta / abs(original) if original != 0 else Decimal(0)
-    report.add(
-        "info",
-        code,
-        (
-            f"{message_prefix} was rounded automatically from {original} to {rounded} "
-            f"to fit float64 storage (absolute difference {delta:.3e}, "
-            f"relative difference {relative:.3e}); "
-            "the original decimal remains preserved in the TIDAS metadata"
-        ),
-        dataset=dataset,
-        path=path,
+    process: DatasetRecord,
+    precision: PrecisionPolicy,
+) -> float | None:
+    return precision.convert(
+        exchange.get("resultingAmount", exchange.get("meanAmount")),
+        report,
+        dataset=process.identity,
+        path=f"exchange:{exchange.get('@dataSetInternalID')}",
     )
 
 
@@ -1242,3 +1234,32 @@ def _expected_elementary_direction(record: DatasetRecord) -> str | None:
     if top.startswith("emission"):
         return "Output"
     return None
+
+
+def _contains_correlation(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return any(
+            (
+                str(key).split(":")[-1].lower()
+                in {
+                    "correlation",
+                    "correlations",
+                    "covariance",
+                    "correlationmatrix",
+                    "covariancematrix",
+                }
+                and item not in (None, "", [], {})
+            )
+            or _contains_correlation(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_contains_correlation(item) for item in value)
+    return False
+
+
+def _equal_decimal_amounts(left: Any, right: Any) -> bool:
+    try:
+        return Decimal(str(left)) == Decimal(str(right))
+    except InvalidOperation:
+        return False
